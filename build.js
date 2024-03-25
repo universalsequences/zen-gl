@@ -4,6 +4,8 @@ const { exec } = require('child_process');
 const path = require('path');
 const pako = require("pako");
 
+var deflate = require('deflate-js');
+
 function buf2hex(buffer) {
     return Array.prototype.map
         .call(new Uint8Array(buffer), (x) => ("00" + x.toString(16)).slice(-2))
@@ -27,7 +29,14 @@ exec(`npx webpack`, (stderr, stdout) => {
         
         //const formattedData = data.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + ";window.ZEN_LIB = zen; Object.keys(ZEN_LIB).forEach(key => window[key] = ZEN_LIB[key]);";
         let last = ";window.gl = gl;";
-        const inputFile = data ;//data.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + 
+        data  += last;
+        var input = new TextEncoder().encode(data);
+        console.log(input);
+        var compressed = deflate.deflate(input); //pako.deflate(input);
+        var compressedBase64 = Buffer.from(compressed).toString('base64');
+        const decompressedSize = new Blob([data]).size;
+        const inputFile = decompressedSize + "," + compressedBase64;
+        console.log("inputFile.length=", inputFile);
 
         const MAX_SIZE = 18000;
         let chunks = Math.ceil(inputFile.length / MAX_SIZE);
@@ -35,14 +44,14 @@ exec(`npx webpack`, (stderr, stdout) => {
         for (let chunk=0; chunk < chunks; chunk++) {
             let libChunk = inputFile.slice(chunk*MAX_SIZE, (chunk+1)*MAX_SIZE);
             libChunk = libChunk.replace(/\\/g, '\\\\').replace(/"/g, '\\"'); 
-            if (chunk === chunks - 1) {
-                libChunk += last;
-            }
+            //if (chunk === chunks - 1) {
+                //libChunk += last;
+           // }
 
             const solidity = `
 pragma solidity ^0.8.20;
 
-contract ZenGLLibrary {
+contract ZenCompressedGLLibrary {
     string public data;
 
     constructor() {
@@ -55,8 +64,8 @@ contract ZenGLLibrary {
 }
 `;
             
-            const written = fs.writeFileSync(`ZenGLLibrary.sol`, solidity, "utf-8");
-            console.log(`Wrote compressed library at ZenGLLibrary.sol size=%s KB`, libChunk.length / 1000);
+            const written = fs.writeFileSync(`ZenCompressedGLLibrary.sol`, solidity, "utf-8");
+            console.log(`Wrote compressed library at ZenGLLibrary${chunk}.sol size=%s KB`, libChunk.length / 1000);
         }
     });
 

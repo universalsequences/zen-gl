@@ -40,6 +40,10 @@ return ${_body.variable};
             functions: emitFunctions(_body), // maybe the body references even more functions
             functionArguments: emitArguments(_body),
         };
+
+        for (let uni of functionContext.uniforms) {
+            context.uniforms.push(uni);
+        }
         return cache;
     };
 };
@@ -65,8 +69,9 @@ export const call = (lazyFunction: Arg, ...args: Arg[]): UGen => {
         let generated: Generated = context.emit(_func.type, code, variable, ..._args);
         let _funcs = generated.functions === undefined ? [] : generated.functions;
 
+
         // append function
-        generated.functions = [..._funcs, _func];
+        generated.functions = [...(_func.functions || []), ..._funcs, _func,];
         generated.uniforms = [...(generated.uniforms || []), ...(_func.uniforms || [])];
         return generated;
     });
@@ -102,14 +107,16 @@ export interface Argument {
     name: string;
     num: number;
     type: GLType;
+    variable: string;
 }
 
 export const argument = (name: string, num: number, type: GLType): UGen => {
     return memo((context: Context): Generated => {
         let [_var] = context.useVariables("funcArg");
+        name = name + _var;
         let out = `${context.printType(type)} ${_var} = ${name}; `;
         let generated: Generated = context.emit(type, out, _var);
-        let args = [...(generated.functionArguments || []), { name, num, type }];
+        let args = [...(generated.functionArguments || []), { name, num, type, variable: _var }];
         // dedupe
         args = Array.from(new Set(args));
         generated.functionArguments = args;

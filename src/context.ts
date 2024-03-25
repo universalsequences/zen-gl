@@ -1,28 +1,34 @@
 import { GLType, Arg, UniformDefinition, Error, Generated, EmittedVariables, UGen, Context, ChildContext } from './types';
+import { Varying } from './varying';
+import { Attribute, emitAttributes } from './attributes';
 import { emitFunctions, emitArguments } from './functions';
+import { emitAccumulators } from './loop';
 import { Uniform } from './uniforms';
+import { Texture } from './texture';
 
 export class ContextImpl implements Context {
     idx: number;
     emittedVariables: EmittedVariables;
+    attributes: Attribute[];
     errors: Error[];
     webGLRenderingContext: WebGLRenderingContext | null;
     webGLProgram: WebGLProgram | null;
     uniforms: Uniform[];
+    varyings: Varying[];
+    siblingContext?: Context;
+    textures: Texture[];
 
-    constructor() {
+    constructor(siblingContext?: Context) {
         this.idx = 0;
+        this.siblingContext = siblingContext;
         this.emittedVariables = {};
+        this.attributes = [];
         this.uniforms = [];
+        this.varyings = [];
         this.errors = [];
+        this.textures = [];
         this.webGLRenderingContext = null;
         this.webGLProgram = null;
-    }
-
-    initializeUniforms() {
-        for (let uni of this.uniforms) {
-            uni.set!();
-        }
     }
 
     isVariableEmitted(name: string): boolean {
@@ -48,12 +54,20 @@ export class ContextImpl implements Context {
     printType(type: GLType): string {
         if (type === GLType.Float) {
             return "float";
+        } else if (type === GLType.Bool) {
+            return "bool";
         } else if (type === GLType.Vec2) {
             return "vec2";
         } else if (type === GLType.Vec3) {
             return "vec3";
         } else if (type === GLType.Vec4) {
             return "vec4";
+        } else if (type === GLType.Mat2) {
+            return "mat2";
+        } else if (type === GLType.Mat3) {
+            return "mat3";
+        } else if (type === GLType.Mat4) {
+            return "mat4";
         } else {
             return "sampler2D";
         }
@@ -61,6 +75,118 @@ export class ContextImpl implements Context {
 
     emitError(error: Error) {
         this.errors.push(error);
+    }
+
+    initializeTexture(gl: WebGLRenderingContext, webGLTexture: WebGLTexture, textureObj: Texture, interpolate: boolean) {
+        let unit = textureObj.unit || 0;
+        gl.activeTexture(gl.TEXTURE0 + unit); // Activate the texture unit
+        gl.bindTexture(gl.TEXTURE_2D, webGLTexture);
+
+        // Set texture parameters
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        if (interpolate) {
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        } else {
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        }
+
+        // Default texture format and type
+        const format = gl.RGBA;
+        const type = gl.UNSIGNED_BYTE;
+
+        gl.texImage2D(gl.TEXTURE_2D, 0, format, textureObj.width, textureObj.height, 0, format, type, textureObj.initialData);
+
+    }
+
+    /**
+     * initializes all the textures and if any of them are a feedback texture,
+     * we return it (otherwise return null)
+     */
+    initializeTextures(gl: WebGLRenderingContext, canvas: HTMLCanvasElement): Texture | null {
+        let feedbackTexture: Texture | null = null;
+        let unitCounter = 0;
+        for (let i = 0; i < this.textures.length; i++) {
+            let textureObj = this.textures[i];
+            gl.bindTexture(gl.TEXTURE_2D, null);
+            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+            // Assign a texture unit based on the index
+            if (textureObj.feedback) {
+                let textures = [];
+                let frameBuffers = [];
+                let units = [];
+                textureObj.width = canvas.width;
+                textureObj.height = canvas.height;
+                textureObj.initialData = null;
+
+                // feedback textures contain 2 texture+framebuffer pairs
+                for (let i = 0; i < 2; i++) {
+                    const fbTexture = gl.createTexture();
+                    const framebuffer = gl.createFramebuffer();
+                    if (!framebuffer || !fbTexture) {
+                        // todo: emit error
+                        return null;
+                    }
+
+                    let unit = unitCounter;
+                    units[i] = unit;
+                    unitCounter++;
+                    this.initializeTexture(gl, fbTexture, textureObj, false);
+                    gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+                    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, fbTexture, 0);
+
+
+                    // Store the framebuffer and texture
+                    frameBuffers[i] = framebuffer;
+                    textures[i] = fbTexture;
+
+                    gl.bindTexture(gl.TEXTURE_2D, null);
+                    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+                }
+                textureObj.frameBuffers = frameBuffers;
+                textureObj.textures = textures;
+                textureObj.units = units;
+                textureObj.currentFrameBuffer = 0;
+                feedbackTexture = textureObj;
+            } else {
+                // non-feedback texture initialization
+
+                const webGLTexture = gl.createTexture();
+                if (!webGLTexture) {
+                    continue;
+                }
+                textureObj.unit = unitCounter;
+                unitCounter++;
+
+                textureObj.texture = webGLTexture;
+
+                this.initializeTexture(gl, webGLTexture, textureObj, false);
+            }
+
+            // Update texture object
+            const format = gl.RGBA;
+            const type = gl.UNSIGNED_BYTE;
+            textureObj.format = format;
+            textureObj.type = type;
+            textureObj.initialized = true;
+            textureObj.parameters = {
+                [gl.TEXTURE_WRAP_S]: gl.CLAMP_TO_EDGE,
+                [gl.TEXTURE_WRAP_T]: gl.CLAMP_TO_EDGE,
+                [gl.TEXTURE_MIN_FILTER]: gl.LINEAR,
+                [gl.TEXTURE_MAG_FILTER]: gl.LINEAR,
+            };
+        }
+
+        return feedbackTexture;
+    }
+
+    initializeUniforms() {
+        for (let uni of this.uniforms) {
+            uni.set!();
+        }
     }
 
     emit(type: GLType, code: string, variable: string, ...args: Generated[]): Generated {
@@ -88,6 +214,8 @@ export class ContextImpl implements Context {
             variables: Array.from(_variables),
             functions: emitFunctions(...args),
             functionArguments: emitArguments(...args),
+            loopAccumulators: emitAccumulators(...args),
+            attributes: emitAttributes(...args),
         };
     }
 
@@ -142,16 +270,3 @@ export const emitType = (gens: Generated[]) => {
     return maxType;
 };
 
-export const printType = (type: GLType): string => {
-    if (type === GLType.Float) {
-        return "float";
-    } else if (type === GLType.Vec2) {
-        return "vec2";
-    } else if (type === GLType.Vec3) {
-        return "vec3";
-    } else if (type === GLType.Vec4) {
-        return "vec4";
-    } else {
-        return "sampler2D";
-    }
-};

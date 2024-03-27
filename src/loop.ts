@@ -15,19 +15,14 @@ export const sumLoop = (body: Arg, iterations: Arg): UGen => {
 
         let accumulators = emitAccumulators(_body);
 
-        console.log('function argums for loop=', accumulators);
         // need to be able to reference this variable w/in the loop
-        //
         let [loopVar] = context.useVariables("loop_val");
-
 
         if (accumulators[0]) {
             // need a function argument...
             loopVar = accumulators[0].name
             _initialVal = accumulators[0].initial;
-            console.log('choosing loopVar=', loopVar);
         }
-
 
         // okay so we have an argument so we need to use that 
         // determine the type based on the arguments to switch

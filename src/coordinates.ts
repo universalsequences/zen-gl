@@ -107,7 +107,7 @@ export const vec = (type: GLType) => {
             let _inputs = inputs.map(input => context.gen(input));
             let [vec] = context.useVariables("vectorVal");
             let _type = context.printType(type);
-            let code = `${_type} ${vec} = ${_type} (${_inputs.map(i => i.variable).join(",")}); `;
+            let code = `${_type} ${vec} = ${_type} (${_inputs.map(i => i.variable).join(",")});`;
             return context.emit(
                 type,
                 code,

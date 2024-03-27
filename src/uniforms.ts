@@ -24,11 +24,12 @@ export type Uniform = (() => UGen) & {
     getHeight?: () => number | undefined;
 }
 
+let ID_COUNTER=0;
 export const uniform = (type: GLType, val: Data, width?: number, height?: number, isFeedback?: boolean): Uniform => {
     let contexts: Context[] = [];
     let uniformDefinition: UniformDefinition;
     let lastValue: Data = val;
-    let id = "_" + Math.floor(100000 * Math.random());
+    let id = "_" + Math.floor(100000 * ID_COUNTER++);
     let texture: Texture;
 
     // create a Texture object

@@ -3,44 +3,73 @@ import { memo } from './memo';
 import { Context, Arg, UGen, Generated, GLType } from './types';
 import { emitType } from './context';
 
+/**
+ * Helper function for defining built-in WebGL operators (like +, -, *, etc)
+ * 
+ * @param operator WebGL operator to use for this operation
+ * @param name Human-readable name of the operator (used in variable)
+ * @param strictType If given, then we do not infer type & use this type
+ * @returns 
+ */
 const op = (operator: string, name: string, strictType?: GLType) => {
     return (...args: Arg[]): UGen => {
         return memo((context: Context): Generated => {
-            let _args: Generated[] = args.map((arg: Arg) => context.gen(arg));
+            // evaluate the nested dependencies for this operation
+            let evaluatedArgs: Generated[] = args.map((arg: Arg) => context.gen(arg));
 
-            // we ask for a new variable name
-            let [opVar] = context.useVariables(name + "Val");
+            // ask for a new (distinct) variable name from context
+            let [variableName] = context.useVariables(name + "Val");
 
-            // determine type from the args (e.g. 5 + vec2(2,5) -> vec2)
-            let _type = strictType === undefined ? emitType(_args) : strictType;
-            let type = context.printType(_type);
+            // determine type from the arguments (e.g. 5 + vec2(2,5) -> results in a vec2 in WebGL)
+            let _type: GLType = strictType === undefined ? emitType(evaluatedArgs) : strictType;
+            let type: string = context.printType(_type);
 
-            let code = `${type} ${opVar} = ${_args.map(x => x.variable).join(operator)};`;
+            // construct the core code string for this operation, using the dependent variables 
+            let code = `${type} ${variableName} = ${evaluatedArgs.map(x => x.variable).join(operator)};`;
+
+            // emit out all dependencies along with the core code string into a new Generated object
             return context.emit(
                 _type,
                 code,
-                opVar,
-                ..._args);
+                variableName,
+                ...evaluatedArgs);
         });
     };
 };
 
+/**
+ * Helper function for defining built-in WebGL functions (like sin/cos/pow etc)
+ * 
+ * @param func WebGL function name
+ * @param name Human-readable name of the function (used in the variable)
+ * @param jsFunc  if given & all arguments are numbers, we use this function to evaluate
+ * @param strictType if given, we use this type instead of infering from arguments 
+ * @returns 
+ */
 export const func = (
     func: string,
     name: string = func,
     jsFunc?: (...x: number[]) => number,
-    __type?: GLType) => {
+    strictType?: GLType) => {
     return (...ins: Arg[]): UGen => {
         return memo((context: Context): Generated => {
-            let _ins = ins.map(f => context.gen(f));
-            let [opVar] = context.useVariables(`${name}Val`);
+            // evaluate the nested dependencies for this operation
+            let evaluatedArgs = ins.map(f => context.gen(f));
+            
+            // ask for new variable name
+            let [variableName] = context.useVariables(`${name}Val`);
 
-            let _type = __type === undefined ? emitType(_ins) : __type;
+            // determine the type from the dependencies
+            let _type = strictType === undefined ? emitType(evaluatedArgs) : strictType;
             let type = context.printType(_type);
+
+            // if every argument is number, then we simply evaluate it here
+            // otherwise, we construct the core code string for 
             let code = ins.length > 0 && jsFunc && ins.every(x => typeof x === "number") ?
-                `${type} ${opVar} = ${jsFunc(...ins as number[])};` :
-                `${type} ${opVar} = ${func}(${_ins.map(x => x.variable).join(",")});`;
-            return context.emit(_type, code, opVar, ..._ins);
+                `${type} ${variableName} = ${jsFunc(...ins as number[])};` :
+                `${type} ${variableName} = ${func}(${evaluatedArgs.map(x => x.variable).join(",")});`;
+
+            return context.emit(_type, code, variableName, ...evaluatedArgs);
         });
     }
 };
